@@ -9,11 +9,13 @@ namespace ShoppingCart.PricingService
     {
         private readonly IShop _shop;
         private Receipt _receipt;
+        private List<Discount> _currentDiscounts;
         private decimal _currentBest;
 
         public BranchAndBoundPriceCalculator(IShop shop)
         {
             _shop = shop;
+            _currentDiscounts = new List<Discount>();
         }
 
         private decimal GetTotal(Basket basket)
@@ -23,11 +25,13 @@ namespace ShoppingCart.PricingService
 
         public Receipt GetReceipt(Basket basket)
         {
-            return new Receipt
+            _receipt = new Receipt
             {
                 Items = GetBasketItems(basket),
-                Total = GetTotal(basket)
+                Total = GetTotal(basket),
+                Discounts = _currentDiscounts
             };
+            return _receipt;
         }
 
         private static List<Item> GetBasketItems(Basket basket)
@@ -42,16 +46,33 @@ namespace ShoppingCart.PricingService
             
             if (!discounts.Any())
             {
-                return ApplyUnitPrice(basketItems);
+                var pathTotal = GetPathTotal(basketItems, appliedDiscounts);
+                if (_currentBest == 0m || pathTotal < _currentBest)
+                {
+                    _currentBest = pathTotal;
+                    _currentDiscounts = appliedDiscounts;
+                }
+                return pathTotal;
             }
-            var discount = discounts.First();
 
-            var items = CopyDictionary(basketItems);
-            items = ApplyDiscount(items, discount);
-            var priceWithDiscount = BranchAndBound(items, appliedDiscounts.Append(discount).ToList(), removedDiscounts) + discount.DiscountPrice;
-            var priceWithoutDiscount = BranchAndBound(basketItems, appliedDiscounts, removedDiscounts.Append(discount).ToList());
+            if (_currentBest > 0m && appliedDiscounts.Sum(d => d.DiscountPrice) > _currentBest)
+            {
+                return GetPathTotal(basketItems, appliedDiscounts);
+            }
+
+            var topDiscount = discounts.First();
+            
+            var itemsWithDiscountApplied = ApplyDiscount(CopyDictionary(basketItems), topDiscount);
+
+            var priceWithDiscount = BranchAndBound(itemsWithDiscountApplied, appliedDiscounts.Append(topDiscount).ToList(), removedDiscounts);
+            var priceWithoutDiscount = BranchAndBound(basketItems, appliedDiscounts, removedDiscounts.Append(topDiscount).ToList());
 
             return priceWithDiscount <= priceWithoutDiscount ? priceWithDiscount : priceWithoutDiscount;
+        }
+
+        private static decimal GetPathTotal(IDictionary<Item, int> basketItems, List<Discount> appliedDiscounts)
+        {
+            return appliedDiscounts.Sum(d => d.DiscountPrice) + ApplyUnitPrice(basketItems);
         }
 
         private static Dictionary<Item, int> ApplyDiscount(Dictionary<Item, int> items, Discount discount)
